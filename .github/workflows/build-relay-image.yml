@@ -1,0 +1,81 @@
+name: Build Remodex Relay Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Ghost233/remodex ref to build"
+        required: false
+        default: "ghost"
+      image_tag:
+        description: "Container image tag"
+        required: false
+        default: "latest"
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  SOURCE_REPOSITORY: Ghost233/remodex
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'ghost' }}
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/ysremodex-relay
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+
+jobs:
+  build:
+    name: Build relay image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify source repository token
+        env:
+          REMODEX_SOURCE_PAT: ${{ secrets.REMODEX_SOURCE_PAT }}
+        run: |
+          if [ -z "${REMODEX_SOURCE_PAT}" ]; then
+            echo "::error title=Missing source token::Set the REMODEX_SOURCE_PAT repository secret with read access to Ghost233/remodex."
+            exit 1
+          fi
+
+      - name: Checkout Remodex relay source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.REMODEX_SOURCE_PAT }}
+          path: remodex-src
+          sparse-checkout: relay
+          sparse-checkout-cone-mode: true
+
+      - name: Read source revision
+        id: source
+        working-directory: remodex-src
+        run: |
+          echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: remodex-src/relay
+          file: remodex-src/relay/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_NAME }}:source-${{ steps.source.outputs.sha }}
+          labels: |
+            org.opencontainers.image.title=Remodex Relay
+            org.opencontainers.image.source=https://github.com/${{ env.SOURCE_REPOSITORY }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.full_sha }}
