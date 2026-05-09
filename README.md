@@ -17,4 +17,8 @@ The workflow sparse-checks out `relay/` from `Ghost233/remodex`, builds
 Manual runs can override:
 
 - `source_ref`: defaults to `ghost`
-- `image_tag`: defaults to `latest`
+
+Every run publishes only release tags:
+
+- `latest`
+- `source-<source-sha>`
