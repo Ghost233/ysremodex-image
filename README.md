@@ -11,8 +11,8 @@ Create this repository secret:
 The workflow sparse-checks out `relay/` from `Ghost233/remodex`, builds
 `relay/Dockerfile`, and pushes:
 
-- `ghcr.io/Ghost233/ysremodex-relay:latest`
-- `ghcr.io/Ghost233/ysremodex-relay:source-<source-sha>`
+- `ghcr.io/ghost233/ysremodex-relay:latest`
+- `ghcr.io/ghost233/ysremodex-relay:source-<source-sha>`
 
 Manual runs can override:
 
