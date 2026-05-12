@@ -37,7 +37,7 @@ jobs:
           fi
 
       - name: Checkout Remodex Tarui source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
           ref: ${{ env.SOURCE_REF }}
@@ -95,15 +95,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tarui.outputs.tag }}
         run: |
-          if gh release view "${TAG}" >/dev/null 2>&1; then
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "::error title=Release already exists::${TAG} already exists. Bump version or build number."
             exit 1
           fi
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: remodex-src/remodex-tarui/package-lock.json
 
@@ -166,5 +166,6 @@ jobs:
           EOF
 
           gh release create "${TAG}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "Remodex Tarui ${VERSION_BUILD}" \
             --notes-file release-notes.md
