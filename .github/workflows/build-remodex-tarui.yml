@@ -1,0 +1,170 @@
+name: Build Remodex Tarui Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Ghost233/remodex ref to build"
+        required: false
+        default: "ghost"
+      build_number:
+        description: "Optional build number; defaults to this workflow run number"
+        required: false
+        default: ""
+  schedule:
+    - cron: "43 3 * * *"
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_REPOSITORY: Ghost233/remodex
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'ghost' }}
+
+jobs:
+  build:
+    name: Build remodex-tarui
+    runs-on: macos-latest
+
+    steps:
+      - name: Verify source repository token
+        env:
+          REMODEX_SOURCE_PAT: ${{ secrets.REMODEX_SOURCE_PAT }}
+        run: |
+          if [ -z "${REMODEX_SOURCE_PAT}" ]; then
+            echo "::error title=Missing source token::Set the REMODEX_SOURCE_PAT repository secret with read access to Ghost233/remodex."
+            exit 1
+          fi
+
+      - name: Checkout Remodex Tarui source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.REMODEX_SOURCE_PAT }}
+          path: remodex-src
+          sparse-checkout: remodex-tarui
+          sparse-checkout-cone-mode: true
+
+      - name: Read source revision
+        id: source
+        working-directory: remodex-src
+        run: |
+          echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Read Tarui version and build
+        id: tarui
+        env:
+          BUILD_NUMBER_INPUT: ${{ github.event.inputs.build_number }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const root = path.join(process.cwd(), "remodex-src", "remodex-tarui");
+          const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+          const tauriConfig = JSON.parse(fs.readFileSync(path.join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+          const cargoToml = fs.readFileSync(path.join(root, "src-tauri", "Cargo.toml"), "utf8");
+          const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+          const version = tauriConfig.version;
+
+          if (!version || packageJson.version !== version || cargoVersion !== version) {
+            console.error(`Version mismatch: package=${packageJson.version || ""} tauri=${version || ""} cargo=${cargoVersion || ""}`);
+            process.exit(1);
+          }
+
+          const buildNumber = (process.env.BUILD_NUMBER_INPUT || process.env.RUN_NUMBER || "").trim();
+          if (!/^[0-9A-Za-z][0-9A-Za-z.-]*$/.test(buildNumber)) {
+            console.error(`Invalid build number: ${buildNumber}`);
+            process.exit(1);
+          }
+
+          const versionBuild = `${version}+${buildNumber}`;
+          const tag = `remodex-tarui-v${versionBuild}`;
+          const output = process.env.GITHUB_OUTPUT;
+          fs.appendFileSync(output, `version=${version}\n`);
+          fs.appendFileSync(output, `build_number=${buildNumber}\n`);
+          fs.appendFileSync(output, `version_build=${versionBuild}\n`);
+          fs.appendFileSync(output, `tag=${tag}\n`);
+          NODE
+
+      - name: Check version and build release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tarui.outputs.tag }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error title=Release already exists::${TAG} already exists. Bump version or build number."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: remodex-src/remodex-tarui/package-lock.json
+
+      - name: Install Rust macOS targets
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Install Tarui dependencies
+        working-directory: remodex-src/remodex-tarui
+        run: npm ci
+
+      - name: Build Tarui macOS universal bundle
+        working-directory: remodex-src/remodex-tarui
+        env:
+          REMODEX_TARUI_BUILD_NUMBER: ${{ steps.tarui.outputs.build_number }}
+          REMODEX_TARUI_BUILD_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          npm run tauri:build -- \
+            --target universal-apple-darwin \
+            --bundles app,dmg \
+            --ci \
+            --no-sign \
+            --config '{"bundle":{"active":true}}'
+
+      - name: Collect release assets
+        env:
+          VERSION_BUILD: ${{ steps.tarui.outputs.version_build }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          bundle_dir="remodex-src/remodex-tarui/src-tauri/target/universal-apple-darwin/release/bundle"
+
+          app_path="$(find "${bundle_dir}/macos" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+          dmg_path="$(find "${bundle_dir}/dmg" -maxdepth 1 -name '*.dmg' -type f | head -n 1)"
+
+          if [ -z "${app_path}" ] || [ -z "${dmg_path}" ]; then
+            echo "::error title=Missing bundle::Expected both .app and .dmg outputs under ${bundle_dir}."
+            find "${bundle_dir}" -maxdepth 3 -print || true
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent "${app_path}" "release-assets/remodex-tarui-${VERSION_BUILD}-macos-universal.app.zip"
+          cp "${dmg_path}" "release-assets/remodex-tarui-${VERSION_BUILD}-macos-universal.dmg"
+
+      - name: Publish Tarui release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tarui.outputs.tag }}
+          VERSION_BUILD: ${{ steps.tarui.outputs.version_build }}
+          SOURCE_SHA: ${{ steps.source.outputs.full_sha }}
+        run: |
+          cat > release-notes.md <<EOF
+          Remodex Tarui ${VERSION_BUILD}
+
+          Source: https://github.com/${SOURCE_REPOSITORY}
+          Source ref: ${SOURCE_REF}
+          Source revision: ${SOURCE_SHA}
+
+          Version check key: ${VERSION_BUILD}
+          EOF
+
+          gh release create "${TAG}" release-assets/* \
+            --title "Remodex Tarui ${VERSION_BUILD}" \
+            --notes-file release-notes.md
