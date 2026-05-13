@@ -43,7 +43,10 @@ jobs:
           ref: ${{ env.SOURCE_REF }}
           token: ${{ secrets.REMODEX_SOURCE_PAT }}
           path: remodex-src
-          sparse-checkout: remodex-tarui
+          sparse-checkout: |
+            remodex-tarui
+            phodex-bridge
+            relay
           sparse-checkout-cone-mode: true
 
       - name: Read source revision
