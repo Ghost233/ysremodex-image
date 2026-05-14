@@ -85,23 +85,11 @@ jobs:
           }
 
           const versionBuild = `${version}-${buildNumber}`;
-          const tag = `remodex-tarui-v${versionBuild}`;
           const output = process.env.GITHUB_OUTPUT;
           fs.appendFileSync(output, `version=${version}\n`);
           fs.appendFileSync(output, `build_number=${buildNumber}\n`);
           fs.appendFileSync(output, `version_build=${versionBuild}\n`);
-          fs.appendFileSync(output, `tag=${tag}\n`);
           NODE
-
-      - name: Check version and build release tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tarui.outputs.tag }}
-        run: |
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "::error title=Release already exists::${TAG} already exists. Bump version or build number."
-            exit 1
-          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -154,12 +142,14 @@ jobs:
       - name: Publish Tarui release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tarui.outputs.tag }}
+          TAG: latest
           VERSION_BUILD: ${{ steps.tarui.outputs.version_build }}
           SOURCE_SHA: ${{ steps.source.outputs.full_sha }}
         run: |
           cat > release-notes.md <<EOF
-          Remodex Tarui ${VERSION_BUILD}
+          Remodex Tarui latest
+
+          Version: ${VERSION_BUILD}
 
           Source: https://github.com/${SOURCE_REPOSITORY}
           Source ref: ${SOURCE_REF}
@@ -168,7 +158,51 @@ jobs:
           Version check key: ${VERSION_BUILD}
           EOF
 
-          gh release create "${TAG}" release-assets/* \
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release view "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[].name' |
+              while IFS= read -r asset_name; do
+                if [ -n "${asset_name}" ]; then
+                  gh release delete-asset "${TAG}" "${asset_name}" \
+                    --repo "${GITHUB_REPOSITORY}" \
+                    --yes
+                fi
+              done
+            gh release upload "${TAG}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            gh release edit "${TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Remodex Tarui latest" \
+              --notes-file release-notes.md \
+              --latest
+          else
+            gh release create "${TAG}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Remodex Tarui latest" \
+              --notes-file release-notes.md \
+              --target main \
+              --latest
+          fi
+
+      - name: Prune versioned Tarui releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Remodex Tarui ${VERSION_BUILD}" \
-            --notes-file release-notes.md
+            --limit 100 \
+            --json tagName \
+            --jq '.[].tagName' |
+            while IFS= read -r tag_name; do
+              case "${tag_name}" in
+                remodex-tarui-v*)
+                  gh release delete "${tag_name}" \
+                    --repo "${GITHUB_REPOSITORY}" \
+                    --cleanup-tag \
+                    --yes
+                  ;;
+              esac
+            done
