@@ -1,0 +1,114 @@
+name: Release Remodex Bridge Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Ghost233/remodex ref to package"
+        required: false
+        default: "ghost"
+      release_tag:
+        description: "Optional release tag; defaults to remodex-bridge-v<package-version>-<run-number>"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_REPOSITORY: Ghost233/remodex
+  SOURCE_REF: ${{ github.event.inputs.source_ref || 'ghost' }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify source repository token
+        env:
+          REMODEX_SOURCE_PAT: ${{ secrets.REMODEX_SOURCE_PAT }}
+        run: |
+          if [ -z "${REMODEX_SOURCE_PAT}" ]; then
+            echo "::error title=Missing source token::Set the REMODEX_SOURCE_PAT repository secret with read access to Ghost233/remodex."
+            exit 1
+          fi
+
+      - name: Checkout bridge source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.REMODEX_SOURCE_PAT }}
+          path: remodex-src
+          sparse-checkout: phodex-bridge
+          sparse-checkout-cone-mode: true
+
+      - name: Read source revision
+        id: source
+        working-directory: remodex-src
+        run: |
+          echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: remodex-src/phodex-bridge/package-lock.json
+
+      - name: Install dependencies
+        working-directory: remodex-src/phodex-bridge
+        run: npm ci
+
+      - name: Run tests
+        working-directory: remodex-src/phodex-bridge
+        run: npm test
+
+      - name: Pack
+        working-directory: remodex-src/phodex-bridge
+        run: npm pack
+
+      - name: Resolve release tag
+        id: release
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event.inputs.release_tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
+          const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "remodex-src", "phodex-bridge", "package.json"), "utf8"));
+          const input = (process.env.RELEASE_TAG_INPUT || "").trim();
+          const runNumber = (process.env.RUN_NUMBER || "").trim();
+          const tag = input || `remodex-bridge-v${pkg.version}-${runNumber}`;
+
+          if (!/^[0-9A-Za-z][0-9A-Za-z._/+:-]*$/.test(tag)) {
+            console.error(`Invalid release tag: ${tag}`);
+            process.exit(1);
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${pkg.version}\n`);
+          NODE
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.full_sha }}
+        run: |
+          cat > release-notes.md <<EOF
+          Remodex bridge package ${VERSION}
+
+          Source: https://github.com/${SOURCE_REPOSITORY}
+          Source ref: ${SOURCE_REF}
+          Source revision: ${SOURCE_SHA}
+          EOF
+
+          gh release create "${TAG}" remodex-src/phodex-bridge/remodex-*.tgz \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Remodex bridge ${VERSION}" \
+            --notes-file release-notes.md
