@@ -84,7 +84,7 @@ jobs:
             process.exit(1);
           }
 
-          const versionBuild = `${version}+${buildNumber}`;
+          const versionBuild = `${version}-${buildNumber}`;
           const tag = `remodex-tarui-v${versionBuild}`;
           const output = process.env.GITHUB_OUTPUT;
           fs.appendFileSync(output, `version=${version}\n`);
