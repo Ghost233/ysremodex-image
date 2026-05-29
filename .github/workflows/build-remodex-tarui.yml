@@ -11,8 +11,6 @@ on:
         description: "Optional build number; defaults to this workflow run number"
         required: false
         default: ""
-  schedule:
-    - cron: "43 3 * * *"
 
 permissions:
   contents: write
