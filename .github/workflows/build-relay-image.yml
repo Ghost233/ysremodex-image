@@ -13,6 +13,8 @@ permissions:
   packages: write
 
 env:
+  # Buildx build records are useful for debugging, but create .dockerbuild artifacts.
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
   SOURCE_REPOSITORY: Ghost233/remodex
   SOURCE_REF: ${{ github.event.inputs.source_ref || 'ghost' }}
 
